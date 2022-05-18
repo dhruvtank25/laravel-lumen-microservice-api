@@ -1,0 +1,4 @@
+ALTER TABLE `authentications`
+	ADD COLUMN `firstname` VARCHAR(255) NULL DEFAULT NULL AFTER `phone`,
+	ADD COLUMN `lastname` VARCHAR(255) NULL DEFAULT NULL AFTER `firstname`,
+

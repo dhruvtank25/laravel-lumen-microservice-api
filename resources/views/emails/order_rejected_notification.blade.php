@@ -1,0 +1,1 @@
+<h1>{{ $order_rejected_message }}!</h1>

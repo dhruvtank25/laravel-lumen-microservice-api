@@ -1,0 +1,306 @@
+import java.text.SimpleDateFormat
+mailList = "thelegendmahesh@gmail.com,gokul280195@gmail.com"
+int result = 0;
+boolean stageVerification = true;
+build_root = "/docker_build/qa"
+project = "akeed-vendor"
+ecr_repo = "902232399736.dkr.ecr.ap-south-1.amazonaws.com/akeedqa-vendor"
+infra_repo_cred = "https://akeed-stg-codecommit-user-at-869764373829:E5olTWCC45Y4THqP9UPl78Es2pFNIfEJPDUf4vReNvs=@git-codecommit.ap-south-1.amazonaws.com/v1/repos/akeed-infra"
+infra_repo_clone_path = "${build_root}/infra"
+
+pipeline {
+    agent any
+    stages {
+        stage('BUILD') {
+            steps {
+				script
+				{
+                    println("Build ====== #####");
+					
+				withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'AWS_Credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+              sh"""
+              
+              sudo echo $USERNAME
+              sudo echo $PASSWORD
+              """
+               }	
+              
+					gitRepoPath = "/jenkins_execution/Akeed/Akeed_vendor/API"
+					gitRepoName = "akeed-vendor-microservices"
+					project = "akeed-vendor"
+					gitUpdate(gitRepoPath,gitRepoName,"qa")
+				}
+            }
+        }
+        
+        	stage('SONARQUBE ANALYSIS') {
+				
+				 steps {
+					script {
+						  // requires SonarQube Scanner 2.8+
+						  scannerHome = tool 'SonarQube Scanner 4.2.0.1873'
+						}
+						withSonarQubeEnv('sonarqube-server') {
+						  sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=Akeed-Vendor-API"
+					}
+				}
+				}
+				
+				stage("Quality Gate") {
+					steps {
+					println("Build ====== #####");
+					//	waitForQualityGate abortPipeline: true
+					}
+				}
+				
+				
+				stage('UNIT TEST') {
+					steps {
+						script
+						{
+							println("Build unit test ====== #####");
+							
+						   /*
+							sh"""
+							
+							sudo rm -rf /var/www/html/*
+							sudo cp -R ${gitRepoPath}/${gitRepoName}/* /var/www/html/
+							
+							sudo -i
+							cd /var/www/html/
+							"vendor/bin/phpunit > unittest.txt"
+							"""
+							value=`cat /var/www/html/unittest.txt`
+							
+							if(value.contains("failures: 0"))
+							{
+								println("### ##### Unit test Results : "+value);
+							}
+							else
+							{
+								error("### ##### Unit test Results : "+value)
+							}
+							*/
+						}
+					}
+				}
+				
+				stage('FUNCTIONAL API TESTS') {
+					steps {
+						script{
+							
+						
+						sh"""
+								sudo mkdir ${gitRepoPath}/${gitRepoName}/automation/Reports
+								sudo mkdir ${gitRepoPath}/${gitRepoName}/automation/logs
+								
+								cd ${gitRepoPath}/${gitRepoName}/automation/
+								pwd
+								sudo jmeter -n -t ${gitRepoPath}/${gitRepoName}/automation/Vendor_APIs_Automation.jmx -l ${gitRepoPath}/${gitRepoName}/automation/logs/Report.csv -e -o ${gitRepoPath}/${gitRepoName}/automation/Reports/
+								cd 
+								"""
+							
+							println("Jmeter command ##");
+							
+						
+							def pCount = sh (
+								returnStdout: true,
+								script :
+								"""
+								grep -o -i true ${gitRepoPath}/${gitRepoName}/automation/logs/Report.csv | wc -l
+								"""
+							)
+							def fCount = sh (
+								returnStdout: true,
+								script :
+								"""
+									grep -o -i false ${gitRepoPath}/${gitRepoName}/automation/logs/Report.csv | wc -l
+								"""
+							)
+							int pass = pCount.toInteger();
+							int fail = fCount.toInteger();
+							
+							if(pass==0)
+							{
+								println("### Total: " + (pass+fail));
+								println("### Pass: " + pCount);
+								println("### Fail: " + fCount);
+								
+								error("### ##### Report Status is :0%, its lower than 90%, so failed the build.")
+							}
+							else{					
+								println("### Total: " + (pass+fail));
+								println("### Pass: " + pCount);
+								println("### Fail: " + fCount);
+								result = ((pass/(pass+fail))*100);
+								if(result < 70){
+									error("### ##### Report Status is :" + result + "%, its lower than 70%, so failed the build.")
+								}		
+								else
+								{
+									println("### ##### Build passed with "+result+" percentage");
+									stageVerification = true;
+								}
+							}
+						}
+					}
+				}
+
+		
+		
+		
+		stage('CODE MIGRATION') {
+            steps {
+				script
+				{
+					if(stageVerification)
+					{
+						println("Build code migration ====== #####");
+						project = "akeed-vendor"
+                        build_path = "akeed-infra/qa/kubernetes"
+                        DB_USR = "akeedappqadbuser"
+                        DB_HOST = "izo-dev-aurorards-01.cluster-ccdsaha05zds.ap-south-1.rds.amazonaws.com"
+                        DB_NAME = "akeedappqadb"
+
+						sh"""
+							sudo rm -rf /deployment_code/Akeed_vendor/API/*
+							sudo cp -R ${gitRepoPath}/${gitRepoName}/* /deployment_code/Akeed_vendor/API
+							
+							sudo echo $BUILD_TIMESTAMP
+                            sudo rm -rf ${build_root}
+                            sudo mkdir -p ${build_root}
+                            cd ${build_root}
+                            sudo git clone -b master -v ${infra_repo_cred}
+                            
+                            
+                            sudo mkdir -p ${build_root}/${project}
+                            sudo cp -R ${gitRepoPath}/${gitRepoName} ${build_root}/${build_path}/${project}/code
+                            
+                            cd ${build_root}/${build_path}/${project}/code
+                            sudo sed -i 's|DB_USERNAME=.*|DB_USR=$DB_USR|g' .env 
+                            sudo sed -i 's|DB_HOST=.*|DB_HOST=$DB_HOST|g' .env 
+                            sudo sed -i 's|DB_DATABASE=.*|DB_DATABASE=$DB_NAME|g' .env 
+                            sudo sed -i 's|DB_PASSWORD=.*|DB_PASSWORD=$akeed_stg_db_pwd|g' .env
+                            
+                            
+                            cd ${build_root}/${build_path}/${project}
+                            sudo docker build -t ${ecr_repo}:$BUILD_TIMESTAMP .
+                            sudo aws ecr get-login-password --profile izo-qa-ecr-user | sudo docker login --username AWS --password-stdin ${ecr_repo}
+                            sudo docker push ${ecr_repo}:$BUILD_TIMESTAMP
+                            
+                            sudo rm -rf ${build_root}/${build_path}/${project}/code
+                            
+                            cd ${build_root}/akeed-infra
+                            sudo sed -i 's|image:.*|image: ${ecr_repo}:$BUILD_TIMESTAMP|g' ${build_root}/${build_path}/${project}/${project}-deployment.yaml
+                            sudo git add . 
+                            sudo git commit -m "Changes for version update to ECR Image $BUILD_TIMESTAMP"
+                            sudo git push origin master
+                            
+                            cd ${build_root}/${build_path}/${project}/
+                            ssh -p 2020 izo_deployer@3.7.78.173 'rm -rf automation/akeedqa-kubernetes-config'
+                            ssh -p 2020 izo_deployer@3.7.78.173 'mkdir -p automation/akeedqa-kubernetes-config'
+                            scp -P 2020 -r ${project}-deployment.yaml izo_deployer@3.7.78.173:/home/izo_deployer/automation/akeedqa-kubernetes-config/
+                            ssh -p 2020 izo_deployer@3.7.78.173 'kubectl apply -f automation/akeedqa-kubernetes-config/${project}-deployment.yaml'
+							
+						"""
+					}
+					else
+					{
+						error("Build code migration failed ====== #####");
+					}
+				}
+            }
+        }
+	}
+	
+	post {
+    	always {
+			script {
+				try{
+						println "### Sending Email on Build Success"
+						def jobName = env.JOB_NAME
+						
+						def attachmentsPath = "${JENKINS_HOME}/jobs/${env.JOB_NAME}/workspace/emailAttachments"
+						sh """						
+						sudo mkdir -p ${attachmentsPath}
+						sudo rm -rf ${attachmentsPath}/*
+						sudo cp -R ${gitRepoPath}/${gitRepoName}/automation/logs ${gitRepoPath}/${gitRepoName}/automation/emailAttachments/
+						sudo cp -R ${gitRepoPath}/${gitRepoName}/automation/Reports ${gitRepoPath}/${gitRepoName}/automation/emailAttachments/			
+						cd ${gitRepoPath}/${gitRepoName}/automation/emailAttachments/
+						pwd
+						sudo zip -r report.zip *
+						sudo cp ${gitRepoPath}/${gitRepoName}/automation/emailAttachments/report.zip ${attachmentsPath}
+						sudo chmod -R 0755 ${attachmentsPath}/report.zip
+						
+						"""						
+					    emailext attachmentsPattern: "emailAttachments/report.zip", attachLog: true , compressLog: true ,subject: '''$DEFAULT_SUBJECT''', body: '''$DEFAULT_CONTENT''', to: "${mailList}"
+
+				}catch(Exception e){
+				
+				
+					println "Error in postBuild actions(successBlock)"+e
+				}
+			}
+		}
+		failure {
+				script {
+					try{
+						if (currentBuild.currentResult == 'FAILURE') { // Other values: SUCCESS, UNSTABLE
+						
+						slackSend channel: 'builds', color: '#ff0000', message: "Pass : ${result} %\nBuild number : ${env.BUILD_NUMBER} - Failed \nJob : ${env.JOB_NAME}", tokenCredentialId: 'akeedslacknotifier', teamDomain: 'invenzolabs'
+						
+						}
+					}catch(Exception e){
+						println "Error in postBuild actions(failureBlock)"+e
+					}
+				}
+			}
+		success {
+				script {
+					try{
+						if (currentBuild.currentResult == 'SUCCESS') {
+						
+						slackSend channel: 'builds', color: '#006400', message: "Pass : ${result} %\nBuild number : ${env.BUILD_NUMBER} - Passed \nJob : ${env.JOB_NAME}", tokenCredentialId: 'akeedslacknotifier', teamDomain: 'invenzolabs'
+						
+						}
+					}catch(Exception e){
+						println "Error in test postBuild actions(successBlock)"+e
+					}
+				}
+			}
+		aborted {
+				script {
+					try{
+						if (currentBuild.currentResult == 'ABORTED') {
+						
+						slackSend channel: 'builds', color: '#A9A9A9', message: "Build number : ${env.BUILD_NUMBER} - Aborted \nJob : ${env.JOB_NAME}", tokenCredentialId: 'akeedslacknotifier', teamDomain: 'invenzolabs'
+						
+						}
+					}catch(Exception e){
+						println "Error in postBuild actions(abortedBlock)"+e
+					}
+				}
+			}
+		}
+}
+
+def gitUpdate(gitRepoPath,gitRepoName,branch){
+	    
+		sh """
+		    
+			cd ${gitRepoPath}
+		    sudo rm -rf ${gitRepoPath}/*
+			
+			sudo git clone -b ${branch} -v https://mahesh-at-782593197243:PVDFmWQrznHAqpaP1tvVeSmSjdZG06WKROlxzzisrc8%3D@git-codecommit.ap-south-1.amazonaws.com/v1/repos/akeed-vendor-microservices
+			pwd
+		   	cd ${gitRepoName}
+			git status
+			
+		"""
+		
+	sh """
+		cd ${gitRepoPath}/${gitRepoName}
+		sudo rm -rf ${gitRepoPath}/${gitRepoName}/Automation/Reports/*
+		sudo rm -rf ${gitRepoPath}/${gitRepoName}/Automation/logs/*
+	"""
+}
